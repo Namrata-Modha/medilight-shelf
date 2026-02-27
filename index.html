@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MediLight — Shelf Device</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',system-ui,sans-serif;background:#050a12;color:#e2e8f0;min-height:100vh;overflow-x:hidden}
+  .top-bar{background:linear-gradient(135deg,#0a0f1c,#0f172a);border-bottom:1px solid #1e293b;padding:10px 20px;display:flex;justify-content:space-between;align-items:center}
+  .top-left{display:flex;align-items:center;gap:10px}
+  .logo{width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#22c55e,#10b981);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#050a12}
+  .title{font-size:13px;font-weight:700;color:#f8fafc}
+  .subtitle{font-size:9px;color:#64748b;letter-spacing:0.08em;text-transform:uppercase}
+  .status-badge{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;font-size:10px;font-weight:700}
+  .status-connected{background:#22c55e15;border:1px solid #22c55e44;color:#86efac}
+  .status-disconnected{background:#ef444415;border:1px solid #ef444444;color:#fca5a5}
+  .status-waiting{background:#eab30815;border:1px solid #eab30844;color:#fde68a}
+  .dot{width:7px;height:7px;border-radius:50%}
+  .dot-green{background:#22c55e;animation:pulse 2s infinite}
+  .dot-red{background:#ef4444}
+  .dot-yellow{background:#eab308;animation:pulse 1.5s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+  @keyframes glow-green{0%,100%{box-shadow:0 0 8px #22c55e55,0 0 24px #22c55e22}50%{box-shadow:0 0 20px #22c55eaa,0 0 48px #22c55e44}}
+  @keyframes glow-led{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.15;transform:scale(0.97)}}
+  .shelf-area{padding:16px;height:calc(100vh - 90px);display:flex;flex-direction:column;gap:12px}
+  .shelf{background:#0a0f1c;border-radius:12px;border:1px solid #1e293b;padding:14px;flex:1;display:flex;flex-direction:column}
+  .shelf-label{font-size:10px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px}
+  .shelf-rows{flex:1;display:flex;flex-direction:column;gap:6px}
+  .shelf-row{display:flex;gap:6px;flex:1}
+  .bin{flex:1;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;border:2px solid #1e293b;background:#0f172a;transition:all 0.15s}
+  .bin.active{border-color:#22c55e;animation:glow-green 1s infinite}
+  .bin.active .bin-inner{animation:glow-led 0.9s infinite}
+  .bin.active .bin-name{color:#052e16}
+  .bin.active .bin-addr{color:#065f46}
+  .bin.active .led-dot{background:#fff;box-shadow:0 0 8px #fff,0 0 16px #22c55e}
+  .bin-inner{width:100%;height:100%;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;transition:background 0.15s}
+  .bin.active .bin-inner{background:linear-gradient(135deg,#22c55e,#16a34a)}
+  .led-dot{position:absolute;top:8px;right:10px;width:10px;height:10px;border-radius:50%;background:#1e293b;border:1px solid #334155;transition:all 0.15s}
+  .bin-name{font-size:12px;font-weight:700;color:#e2e8f0;text-align:center;transition:color 0.15s}
+  .bin-addr{font-size:9px;color:#475569;margin-top:3px;font-family:'JetBrains Mono',monospace;transition:color 0.15s}
+  .log-bar{position:fixed;bottom:0;left:0;right:0;background:#0a0f1c;border-top:1px solid #1e293b;padding:8px 16px;display:flex;align-items:center;gap:10px;font-size:11px;color:#64748b;font-family:'JetBrains Mono',monospace;height:40px}
+  .log-bar .label{font-weight:700;color:#94a3b8}
+  .log-msg{color:#22c55e;font-weight:600}
+  .config-panel{position:fixed;top:50px;right:0;background:#111827;border:1px solid #1e293b;border-radius:0 0 0 12px;padding:14px 18px;width:320px;z-index:10;transition:transform 0.3s;transform:translateX(100%)}
+  .config-panel.open{transform:translateX(0)}
+  .config-toggle{position:fixed;top:55px;right:10px;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:10px;color:#94a3b8;font-weight:600;z-index:11}
+  .config-input{width:100%;padding:8px 10px;border-radius:6px;border:1px solid #334155;background:#0a0f1c;color:#e2e8f0;font-size:12px;font-family:'JetBrains Mono',monospace;outline:none;margin-top:6px}
+  .config-btn{width:100%;padding:8px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;font-size:12px;cursor:pointer;margin-top:10px}
+  .config-label{font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-top:12px}
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="top-left">
+    <div class="logo">M</div>
+    <div>
+      <div class="title">MediLight Shelf Device</div>
+      <div class="subtitle">Virtual LED Controller — Digital Twin</div>
+    </div>
+  </div>
+  <div id="status" class="status-badge status-disconnected">
+    <div class="dot dot-red" id="statusDot"></div>
+    <span id="statusText">Disconnected</span>
+  </div>
+</div>
+
+<button class="config-toggle" onclick="toggleConfig()">⚙ Settings</button>
+<div class="config-panel" id="configPanel">
+  <div style="font-size:13px;font-weight:700;color:#f8fafc;margin-bottom:4px">Backend Connection</div>
+  <div style="font-size:10px;color:#64748b;margin-bottom:12px">Enter your Render backend URL to connect.</div>
+  <div class="config-label">Server URL</div>
+  <input class="config-input" id="serverUrl" value="http://localhost:3001" placeholder="https://medilight-api.onrender.com" />
+  <button class="config-btn" onclick="connectToServer()">Connect</button>
+  <div class="config-label" style="margin-top:16px">Manual Test</div>
+  <button class="config-btn" style="background:#22c55e;color:#052e16;margin-top:6px" onclick="testBlink()">Test All LEDs</button>
+  <button class="config-btn" style="background:#1e293b;color:#94a3b8;margin-top:4px" onclick="clearLeds()">Turn All Off</button>
+</div>
+
+<div class="shelf-area" id="shelfArea"></div>
+
+<div class="log-bar">
+  <span class="label">LOG:</span>
+  <span id="logMsg" class="log-msg">Waiting for connection...</span>
+</div>
+
+<script>
+const PRODUCTS = [
+  { id:"med_001", name:"Amoxicillin 500mg",  addr:"shelf_A_row_1_pos_1" },
+  { id:"med_012", name:"Ibuprofen 400mg",    addr:"shelf_A_row_1_pos_2" },
+  { id:"med_023", name:"Aspirin 81mg",        addr:"shelf_A_row_2_pos_1" },
+  { id:"med_034", name:"Lisinopril 10mg",     addr:"shelf_A_row_2_pos_2" },
+  { id:"med_045", name:"Metformin 500mg",     addr:"shelf_B_row_1_pos_1" },
+  { id:"med_056", name:"Omeprazole 20mg",     addr:"shelf_B_row_1_pos_2" },
+  { id:"med_067", name:"Cetirizine 10mg",     addr:"shelf_B_row_2_pos_1" },
+  { id:"med_078", name:"Prednisone 20mg",     addr:"shelf_B_row_2_pos_2" },
+  { id:"med_089", name:"Lorazepam 1mg",       addr:"shelf_C_row_1_pos_1" },
+  { id:"med_090", name:"Adderall 20mg",       addr:"shelf_C_row_1_pos_2" },
+  { id:"med_091", name:"Codeine 30mg",        addr:"shelf_C_row_2_pos_1" },
+  { id:"med_092", name:"Alprazolam 0.5mg",    addr:"shelf_C_row_2_pos_2" },
+];
+
+const SHELVES = [
+  { label:"Shelf A — General Medications", color:"#3b82f6", rows:[["shelf_A_row_1_pos_1","shelf_A_row_1_pos_2"],["shelf_A_row_2_pos_1","shelf_A_row_2_pos_2"]] },
+  { label:"Shelf B — Specialty", color:"#8b5cf6", rows:[["shelf_B_row_1_pos_1","shelf_B_row_1_pos_2"],["shelf_B_row_2_pos_1","shelf_B_row_2_pos_2"]] },
+  { label:"Shelf C — Controlled Substances", color:"#ef4444", rows:[["shelf_C_row_1_pos_1","shelf_C_row_1_pos_2"],["shelf_C_row_2_pos_1","shelf_C_row_2_pos_2"]] },
+];
+
+let socket = null;
+let activeLeds = new Set();
+let autoOffTimer = null;
+
+function buildShelves() {
+  const area = document.getElementById('shelfArea');
+  area.innerHTML = '';
+  SHELVES.forEach(shelf => {
+    const el = document.createElement('div');
+    el.className = 'shelf';
+    el.innerHTML = '<div class="shelf-label" style="color:'+shelf.color+'">'+shelf.label+'</div><div class="shelf-rows">'+
+      shelf.rows.map(row => '<div class="shelf-row">'+
+        row.map(addr => {
+          const prod = PRODUCTS.find(p => p.addr === addr);
+          return '<div class="bin" id="bin-'+addr+'"><div class="led-dot" id="led-'+addr+'"></div><div class="bin-inner"><div class="bin-name">'+(prod?prod.name:'Empty')+'</div><div class="bin-addr">'+addr.replace(/shelf_|_/g,' ').trim()+'</div></div></div>';
+        }).join('')
+      +'</div>').join('')
+    +'</div>';
+    area.appendChild(el);
+  });
+}
+
+function activateLeds(addresses, durationSec) {
+  clearLeds();
+  activeLeds = new Set(addresses);
+  addresses.forEach(addr => {
+    const bin = document.getElementById('bin-'+addr);
+    if (bin) bin.classList.add('active');
+  });
+  const names = addresses.map(a => { const p = PRODUCTS.find(pr => pr.addr === a); return p ? p.name : a; });
+  logMessage('💡 '+addresses.length+' LED(s) ON: '+names.join(', '));
+  autoOffTimer = setTimeout(() => { clearLeds(); logMessage('⏱ Duration expired. LEDs off.'); }, (durationSec||30)*1000);
+}
+
+function clearLeds() {
+  if (autoOffTimer) clearTimeout(autoOffTimer);
+  activeLeds.forEach(addr => {
+    const bin = document.getElementById('bin-'+addr);
+    if (bin) bin.classList.remove('active');
+  });
+  activeLeds.clear();
+}
+
+function testBlink() { activateLeds(PRODUCTS.map(p => p.addr), 5); }
+
+function connectToServer() {
+  const url = document.getElementById('serverUrl').value.trim();
+  if (!url) return;
+  if (socket) socket.disconnect();
+  setStatus('connecting');
+  logMessage('Connecting to '+url+'...');
+
+  socket = io(url, { transports:['websocket','polling'], reconnectionAttempts:10, reconnectionDelay:2000 });
+
+  socket.on('connect', () => {
+    setStatus('connected');
+    logMessage('✅ Connected! (ID: '+socket.id+')');
+  });
+
+  // ★ THE KEY EVENT — backend sends this when order is confirmed
+  socket.on('led:activate', (payload) => {
+    logMessage('📡 Received: '+payload.command+' ('+payload.targets.length+' targets)');
+    const addresses = payload.targets.map(t => t.led_address);
+    activateLeds(addresses, payload.duration_seconds || 30);
+    socket.emit('led:acknowledged', {
+      transaction_id: payload.transaction_id,
+      leds_activated: addresses.length,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  socket.on('led:deactivate', () => { clearLeds(); logMessage('🔴 Off command received.'); });
+  socket.on('disconnect', () => { setStatus('disconnected'); logMessage('❌ Disconnected.'); });
+  socket.on('connect_error', (err) => { setStatus('disconnected'); logMessage('❌ Failed: '+err.message); });
+  toggleConfig();
+}
+
+function setStatus(state) {
+  const badge = document.getElementById('status');
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  badge.className = 'status-badge';
+  dot.className = 'dot';
+  if (state === 'connected') { badge.classList.add('status-connected'); dot.classList.add('dot-green'); text.textContent = 'Connected to Backend'; }
+  else if (state === 'connecting') { badge.classList.add('status-waiting'); dot.classList.add('dot-yellow'); text.textContent = 'Connecting...'; }
+  else { badge.classList.add('status-disconnected'); dot.classList.add('dot-red'); text.textContent = 'Disconnected'; }
+}
+
+function logMessage(msg) { document.getElementById('logMsg').textContent = msg; }
+
+let configOpen = false;
+function toggleConfig() { configOpen = !configOpen; document.getElementById('configPanel').classList.toggle('open', configOpen); }
+
+buildShelves();
+</script>
+</body>
+</html>
