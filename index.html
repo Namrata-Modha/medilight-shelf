@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MediLight — Shelf Device</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
   *{box-sizing:border-box;margin:0;padding:0}
@@ -73,7 +72,7 @@
   <div style="font-size:13px;font-weight:700;color:#f8fafc;margin-bottom:4px">Backend Connection</div>
   <div style="font-size:10px;color:#64748b;margin-bottom:12px">Enter your Render backend URL to connect.</div>
   <div class="config-label">Server URL</div>
-  <input class="config-input" id="serverUrl" value="http://localhost:3001" placeholder="https://medilight-api.onrender.com" />
+  <input class="config-input" id="serverUrl" value="https://medilight-backend.onrender.com" placeholder="https://medilight-backend.onrender.com" />
   <button class="config-btn" onclick="connectToServer()">Connect</button>
   <div class="config-label" style="margin-top:16px">Manual Test</div>
   <button class="config-btn" style="background:#22c55e;color:#052e16;margin-top:6px" onclick="testBlink()">Test All LEDs</button>
@@ -109,9 +108,11 @@ const SHELVES = [
   { label:"Shelf C — Controlled Substances", color:"#ef4444", rows:[["shelf_C_row_1_pos_1","shelf_C_row_1_pos_2"],["shelf_C_row_2_pos_1","shelf_C_row_2_pos_2"]] },
 ];
 
-let socket = null;
+let ws = null;
 let activeLeds = new Set();
 let autoOffTimer = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT = 10;
 
 function buildShelves() {
   const area = document.getElementById('shelfArea');
@@ -154,36 +155,101 @@ function clearLeds() {
 
 function testBlink() { activateLeds(PRODUCTS.map(p => p.addr), 5); }
 
-function connectToServer() {
-  const url = document.getElementById('serverUrl').value.trim();
+/**
+ * Connect to the backend:
+ * 1. HTTP health check first (wakes up Render free tier — can take 30-50s)
+ * 2. Then open native WebSocket (matches backend's ws library)
+ */
+async function connectToServer() {
+  let url = document.getElementById('serverUrl').value.trim();
   if (!url) return;
-  if (socket) socket.disconnect();
+
+  // Clean up any existing connection
+  if (ws) { ws.close(); ws = null; }
+
   setStatus('connecting');
-  logMessage('Connecting to '+url+'...');
+  reconnectAttempts = 0;
 
-  socket = io(url, { transports:['websocket','polling'], reconnectionAttempts:10, reconnectionDelay:2000 });
+  // Step 1: Wake up server with HTTP ping (handles Render cold start)
+  logMessage('☕ Waking up server (free tier cold start ~30s)...');
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout for cold starts
+    const healthRes = await fetch(url + '/api/health', { signal: controller.signal });
+    clearTimeout(timeout);
+    const health = await healthRes.json();
+    logMessage('✅ Server awake! DB: ' + (health.database || 'unknown') + ', Devices: ' + (health.connected_devices || 0));
+  } catch (err) {
+    logMessage('⚠️ Health check failed: ' + err.message + ' — trying WebSocket anyway...');
+  }
 
-  socket.on('connect', () => {
-    setStatus('connected');
-    logMessage('✅ Connected! (ID: '+socket.id+')');
-  });
-
-  // ★ THE KEY EVENT — backend sends this when order is confirmed
-  socket.on('led:activate', (payload) => {
-    logMessage('📡 Received: '+payload.command+' ('+payload.targets.length+' targets)');
-    const addresses = payload.targets.map(t => t.led_address);
-    activateLeds(addresses, payload.duration_seconds || 30);
-    socket.emit('led:acknowledged', {
-      transaction_id: payload.transaction_id,
-      leds_activated: addresses.length,
-      timestamp: new Date().toISOString(),
-    });
-  });
-
-  socket.on('led:deactivate', () => { clearLeds(); logMessage('🔴 Off command received.'); });
-  socket.on('disconnect', () => { setStatus('disconnected'); logMessage('❌ Disconnected.'); });
-  socket.on('connect_error', (err) => { setStatus('disconnected'); logMessage('❌ Failed: '+err.message); });
+  // Step 2: Open native WebSocket
+  const wsUrl = url.replace(/^http/, 'ws');
+  openWebSocket(wsUrl, url);
   toggleConfig();
+}
+
+function openWebSocket(wsUrl, httpUrl) {
+  logMessage('🔌 Opening WebSocket to ' + wsUrl + '...');
+
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch (err) {
+    logMessage('❌ WebSocket creation failed: ' + err.message);
+    setStatus('disconnected');
+    return;
+  }
+
+  ws.onopen = () => {
+    setStatus('connected');
+    reconnectAttempts = 0;
+    logMessage('✅ WebSocket connected! Listening for LED commands...');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      logMessage('📡 Received: ' + (payload.command || 'LED signal') + ' (' + (payload.targets?.length || 0) + ' targets)');
+
+      // Handle LED activation
+      if (payload.targets && payload.targets.length) {
+        const addresses = payload.targets.map(t => t.led_address);
+        activateLeds(addresses, payload.duration_seconds || 30);
+      }
+
+      // Handle explicit deactivate
+      if (payload.command === 'DEACTIVATE_LEDS') {
+        clearLeds();
+        logMessage('🔴 Off command received.');
+      }
+    } catch (err) {
+      logMessage('⚠️ Bad message: ' + err.message);
+    }
+  };
+
+  ws.onclose = (event) => {
+    setStatus('disconnected');
+    logMessage('❌ WebSocket closed (code: ' + event.code + ')');
+
+    // Auto-reconnect with backoff
+    if (reconnectAttempts < MAX_RECONNECT) {
+      reconnectAttempts++;
+      const delay = Math.min(2000 * reconnectAttempts, 15000);
+      logMessage('🔄 Reconnecting in ' + (delay/1000) + 's (attempt ' + reconnectAttempts + '/' + MAX_RECONNECT + ')...');
+      setTimeout(() => {
+        if (!ws || ws.readyState === WebSocket.CLOSED) {
+          setStatus('connecting');
+          openWebSocket(wsUrl, httpUrl);
+        }
+      }, delay);
+    } else {
+      logMessage('❌ Max reconnect attempts reached. Click Connect to retry.');
+    }
+  };
+
+  ws.onerror = (err) => {
+    logMessage('❌ WebSocket error — server may be sleeping');
+  };
 }
 
 function setStatus(state) {
@@ -202,7 +268,16 @@ function logMessage(msg) { document.getElementById('logMsg').textContent = msg; 
 let configOpen = false;
 function toggleConfig() { configOpen = !configOpen; document.getElementById('configPanel').classList.toggle('open', configOpen); }
 
+// Build shelves on load
 buildShelves();
+
+// Auto-connect on page load
+window.addEventListener('load', () => {
+  const url = document.getElementById('serverUrl').value.trim();
+  if (url && url !== 'http://localhost:3001') {
+    setTimeout(connectToServer, 500);
+  }
+});
 </script>
 </body>
 </html>
