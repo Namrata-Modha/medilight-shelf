@@ -98,6 +98,6 @@ This same protocol is what a real ESP32 microcontroller would receive over WiFi.
 
 ## Related Repos
 
-- **Dashboard** → [medilight-dashboard](https://github.com/YOUR_USERNAME/medilight-dashboard)
-- **Backend API** → [medilight-backend](https://github.com/YOUR_USERNAME/medilight-backend)
-- **Project Guide + Test Images** → [medilight-guide](https://github.com/YOUR_USERNAME/medilight-guide)
+- **Dashboard** → [medilight-dashboard](https://github.com/Namrata-Modha/medilight-dashboard)
+- **Backend API** → [medilight-backend](https://github.com/Namrata-Modha/medilight-backend)
+- **Project Guide + Test Images** → [medilight-guide](https://github.com/Namrata-Modha/medilight-guide)
